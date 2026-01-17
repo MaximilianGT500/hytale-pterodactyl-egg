@@ -1,3 +1,5 @@
+![Picture](https://pics.re/raw/WmWM9S.png)
+
 **Hytale Dedicated Server (Pterodactyl Egg)**
 
 This Pterodactyl egg lets you run the official Hytale Dedicated Server in a clean, container-based environment with simple panel control. It’s made for anyone who wants an easy, repeatable setup—whether you’re running a small private world with friends or building a larger community server.
