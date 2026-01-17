@@ -1,0 +1,244 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-01-17T00:00:00+00:00",
+    "name": "Hytale (Dedicated Server) - DE",
+    "author": "support@lunoxia.de",
+    "description": "Startet einen Hytale Dedicated Server mit dem offiziellen Hytale Downloader (OAuth2). Beim ersten Download wird ein Device-Login im Log ausgegeben (Link + Code im Browser bestätigen). Nach dem ersten Server-Start musst du den Server zusätzlich im Konsolen-Prompt mit \"/auth login device\" authentifizieren, damit Spieler beitreten können. Läuft mit Java 25 (Temurin). Enthält sichere ZIP-Extraktion (unzip falls vorhanden, sonst jar), optionales Auto-Update, Platzspar-Optionen und automatische Erkennung des Assets-Pfads (Assets.zip/HytaleAssets).",
+    "features": [
+        "java_version"
+    ],
+    "docker_images": {
+        "Java 25 (Temurin)": "ghcr.io/pterodactyl/yolks:java_25"
+    },
+    "file_denylist": [],
+    "startup": "bash ./start.sh",
+    "config": {
+        "files": "{}",
+        "startup": "{\r\n  \"done\": \"Ready\",\r\n  \"userInteraction\": []\r\n}",
+        "logs": "{}",
+        "stop": "^C"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/ash\n# Hytale (Official) Installer\n# Server Files: /mnt/server\nset -e\n\nmkdir -p /mnt/server\ncd /mnt/server\n\napk add --no-cache curl unzip ca-certificates bash\n\necho \"==> Lade hytale-downloader...\"\nrm -rf hytale-downloader hytale-downloader.zip\nmkdir -p hytale-downloader\n\n# Robust download (retries)\ncurl -fsSL --retry 5 --retry-delay 2 --connect-timeout 10 \\\n  -o hytale-downloader.zip \"https://downloader.hytale.com/hytale-downloader.zip\"\n\nunzip -o hytale-downloader.zip -d hytale-downloader\nrm -f hytale-downloader.zip\n\nchmod +x hytale-downloader/hytale-downloader-linux-amd64 2>/dev/null || true\nchmod +x hytale-downloader/hytale-downloader-linux-arm64 2>/dev/null || true\n\necho \"==> Schreibe start.sh...\"\ncat > /mnt/server/start.sh << 'EOF'\n#!/usr/bin/env bash\nset -euo pipefail\n\nROOT=\"/home/container\"\ncd \"$ROOT\"\n\nlog() { printf '[HYTALE] %s\\n' \"$*\"; }\n\nis_true() {\n  local v=\"${1:-}\"\n  v=\"${v,,}\"\n  [[ \"$v\" == \"1\" || \"$v\" == \"true\" || \"$v\" == \"yes\" || \"$v\" == \"y\" || \"$v\" == \"on\" ]]\n}\n\n# ---- Downloader binary selection ----\narch=\"$(uname -m)\"\ncase \"$arch\" in\n  x86_64|amd64) DL=\"$ROOT/hytale-downloader/hytale-downloader-linux-amd64\" ;;\n  aarch64|arm64) DL=\"$ROOT/hytale-downloader/hytale-downloader-linux-arm64\" ;;\n  *)\n    log \"[FATAL] Nicht unterstützte Architektur: $arch (unterstützt: x86_64/amd64, aarch64/arm64)\"\n    exit 1\n    ;;\n esac\n\nif [[ ! -x \"$DL\" ]]; then\n  log \"[FATAL] Downloader fehlt oder ist nicht ausführbar: $DL\"\n  log \"Bitte Server neu installieren, um den Downloader wiederherzustellen.\"\n  exit 1\nfi\n\n# ---- Settings (env vars from Pterodactyl) ----\nPATCHLINE=\"${HYTALE_PATCHLINE:-release}\"\n\nAUTO_DOWNLOAD=\"${AUTO_DOWNLOAD:-1}\"   # download if missing\nAUTO_UPDATE=\"${AUTO_UPDATE:-0}\"       # re-download every start\n\nKEEP_CLIENT=\"${KEEP_CLIENT:-0}\"       # keep Client folder (1) or delete (0)\nFORCE_CLEAN=\"${FORCE_CLEAN:-0}\"       # delete Server/ + Assets before (re)download\n\nASSETS_PATH_REQ=\"${ASSETS_PATH:-Assets.zip}\"\n\nTRANSPORT=\"${HYTALE_TRANSPORT:-QUIC}\"\nAUTH_MODE=\"${HYTALE_AUTH_MODE:-authenticated}\"\nBIND_ADDRESS=\"${HYTALE_BIND_ADDRESS:-0.0.0.0}\"\n\nDOWNLOADER_SKIP_UPDATE_CHECK=\"${DOWNLOADER_SKIP_UPDATE_CHECK:-0}\"\nDOWNLOADER_EXTRA_ARGS=\"${DOWNLOADER_EXTRA_ARGS:-}\"\n\nDISABLE_SENTRY=\"${HYTALE_DISABLE_SENTRY:-0}\"\nACCEPT_EARLY_PLUGINS=\"${HYTALE_ACCEPT_EARLY_PLUGINS:-0}\"\nENABLE_BACKUP=\"${HYTALE_ENABLE_BACKUP:-0}\"\nBACKUP_DIR=\"${HYTALE_BACKUP_DIR:-}\"\nBACKUP_FREQ=\"${HYTALE_BACKUP_FREQUENCY_MINUTES:-30}\"\nBACKUP_MAX=\"${HYTALE_BACKUP_MAX_COUNT:-5}\"\n\nMAX_RAM_PCT=\"${JAVA_MAX_RAM_PERCENT:-85}\"\nINIT_RAM_PCT=\"${JAVA_INITIAL_RAM_PERCENT:-10}\"\n\nEXTRA_SERVER_ARGS=\"${HYTALE_EXTRA_ARGS:-}\"\nEXTRA_JAVA_ARGS=\"${JAVA_EXTRA_ARGS:-}\"\n\n# ---- Helpers ----\nextract_zip_into() {\n  local zip=\"$1\" dest=\"$2\"\n  mkdir -p \"$dest\"\n  if command -v unzip >/dev/null 2>&1; then\n    log \"Extrahiere mit unzip...\"\n    (cd \"$dest\" && unzip -o -q \"$zip\")\n  else\n    log \"unzip nicht gefunden; extrahiere mit jar...\"\n    (cd \"$dest\" && jar xf \"$zip\")\n  fi\n}\n\nresolve_assets_path() {\n  # 1) user requested\n  if [[ -e \"$ROOT/$ASSETS_PATH_REQ\" ]]; then\n    printf '%s' \"$ROOT/$ASSETS_PATH_REQ\"\n    return 0\n  fi\n  # 2) common defaults\n  if [[ -e \"$ROOT/Assets.zip\" ]]; then\n    log \"Assets-Pfad '$ASSETS_PATH_REQ' nicht gefunden; nutze Fallback: Assets.zip\"\n    printf '%s' \"$ROOT/Assets.zip\"\n    return 0\n  fi\n  if [[ -d \"$ROOT/HytaleAssets\" ]]; then\n    log \"Assets-Pfad '$ASSETS_PATH_REQ' nicht gefunden; nutze Fallback: HytaleAssets/\"\n    printf '%s' \"$ROOT/HytaleAssets\"\n    return 0\n  fi\n  # 3) best effort: first matching assets\n  local cand\n  cand=\"$(ls -1 \"$ROOT\" 2>/dev/null | grep -E '^(Assets|HytaleAssets)(\\.zip)?$' | head -n 1 || true)\"\n  if [[ -n \"$cand\" && -e \"$ROOT/$cand\" ]]; then\n    log \"Assets automatisch erkannt: $cand\"\n    printf '%s' \"$ROOT/$cand\"\n    return 0\n  fi\n  return 1\n}\n\nhave_server_files() {\n  [[ -f \"$ROOT/Server/HytaleServer.jar\" ]] && resolve_assets_path >/dev/null 2>&1\n}\n\ndownload_and_extract() {\n  local zip_tmp=\"$ROOT/game.zip.part\" zip_final=\"$ROOT/game.zip\"\n  rm -f \"$zip_tmp\" \"$zip_final\" || true\n\n  log \"Lade Serverdateien (patchline: $PATCHLINE)...\"\n\n  local dl_args=(\"-download-path\" \"$zip_tmp\" \"-patchline\" \"$PATCHLINE\")\n  if is_true \"$DOWNLOADER_SKIP_UPDATE_CHECK\"; then\n    dl_args+=(\"-skip-update-check\")\n  fi\n  if [[ -n \"$DOWNLOADER_EXTRA_ARGS\" ]]; then\n    # shellcheck disable=SC2206\n    dl_args+=($DOWNLOADER_EXTRA_ARGS)\n  fi\n\n  # Dieser Aufruf kann beim ersten Mal einen OAuth-Device-Login ausgeben (URL + Code).\n  \"$DL\" \"${dl_args[@]}\"\n\n  mv -f \"$zip_tmp\" \"$zip_final\"\n\n  local tmpdir\n  tmpdir=\"$(mktemp -d)\"\n  log \"Entpacke game.zip (temporär: $tmpdir)...\"\n  extract_zip_into \"$zip_final\" \"$tmpdir\"\n  rm -f \"$zip_final\" || true\n\n  if [[ ! -f \"$tmpdir/Server/HytaleServer.jar\" ]]; then\n    log \"[FATAL] Entpackte Dateien sind unvollständig: $tmpdir/Server/HytaleServer.jar fehlt\"\n    log \"Tipp: Beim ersten Download erscheint ggf. ein Device-Login. Prüfe die Konsole und wiederhole den Start.\"\n    rm -rf \"$tmpdir\" || true\n    exit 1\n  fi\n\n  # Optional cleanup\n  if is_true \"$FORCE_CLEAN\"; then\n    log \"FORCE_CLEAN aktiv: entferne vorhandene Dateien...\"\n    rm -rf \"$ROOT/Server\" \"$ROOT/Client\" || true\n    rm -f \"$ROOT/Assets.zip\" || true\n  fi\n\n  # Replace core components atomically-ish\n  rm -rf \"$ROOT/Server\" || true\n  mv \"$tmpdir/Server\" \"$ROOT/Server\"\n\n  if [[ -e \"$tmpdir/Assets.zip\" ]]; then\n    rm -f \"$ROOT/Assets.zip\" || true\n    mv \"$tmpdir/Assets.zip\" \"$ROOT/Assets.zip\"\n  fi\n\n  if [[ -d \"$tmpdir/Client\" ]]; then\n    if is_true \"$KEEP_CLIENT\"; then\n      rm -rf \"$ROOT/Client\" || true\n      mv \"$tmpdir/Client\" \"$ROOT/Client\"\n    else\n      rm -rf \"$tmpdir/Client\" || true\n    fi\n  fi\n\n  # Copy over remaining (rare) top-level files\n  # Keep minimal to avoid surprises; just clean tmpdir.\n  rm -rf \"$tmpdir\" || true\n\n  if ! is_true \"$KEEP_CLIENT\"; then\n    log \"Client wird gelöscht, um Speicher zu sparen (KEEP_CLIENT=0).\"\n    rm -rf \"$ROOT/Client\" || true\n  fi\n}\n\n# ---- Download / Update ----\nNEEDS_FILES=0\nhave_server_files || NEEDS_FILES=1\n\nif is_true \"$AUTO_DOWNLOAD\" && ( [[ \"$NEEDS_FILES\" == \"1\" ]] || is_true \"$AUTO_UPDATE\" ); then\n  download_and_extract\nfi\n\n# ---- Validate presence ----\nif [[ ! -f \"$ROOT/Server/HytaleServer.jar\" ]]; then\n  log \"[FATAL] HytaleServer.jar fehlt: $ROOT/Server/HytaleServer.jar\"\n  log \"Wenn das der erste Start ist: Prüfe, ob der Downloader einen Device-Login verlangt, und starte danach erneut.\"\n  exit 1\nfi\n\nASSETS_RESOLVED=\"\"\nif ! ASSETS_RESOLVED=\"$(resolve_assets_path)\"; then\n  log \"[FATAL] Assets nicht gefunden. Erwartet: '$ASSETS_PATH_REQ' oder 'Assets.zip' oder 'HytaleAssets'.\"\n  exit 1\nfi\n\n# ---- JVM tuning ----\nJAVA_OPTS=(\n  \"-XX:MaxRAMPercentage=${MAX_RAM_PCT}\"\n  \"-XX:InitialRAMPercentage=${INIT_RAM_PCT}\"\n  \"-XX:+UseG1GC\"\n  \"-XX:+UseStringDeduplication\"\n  \"-XX:+ExitOnOutOfMemoryError\"\n  \"-Dfile.encoding=UTF-8\"\n)\n\n# Optional: AOT cache if present\nif [[ -f \"$ROOT/Server/HytaleServer.aot\" ]]; then\n  JAVA_OPTS+=(\"-XX:AOTCache=$ROOT/Server/HytaleServer.aot\")\nelif [[ -f \"$ROOT/HytaleServer.aot\" ]]; then\n  JAVA_OPTS+=(\"-XX:AOTCache=$ROOT/HytaleServer.aot\")\nfi\n\n# Apply extra args (user provided)\nif [[ -n \"$EXTRA_JAVA_ARGS\" ]]; then\n  # shellcheck disable=SC2206\n  JAVA_OPTS+=($EXTRA_JAVA_ARGS)\nfi\n\n# ---- Server args ----\nSERVER_ARGS=(\n  \"--assets\" \"$ASSETS_RESOLVED\"\n  \"--bind\" \"${BIND_ADDRESS}:${SERVER_PORT}\"\n  \"--transport\" \"$TRANSPORT\"\n  \"--auth-mode\" \"$AUTH_MODE\"\n)\n\nif is_true \"$DISABLE_SENTRY\"; then\n  SERVER_ARGS+=(\"--disable-sentry\")\nfi\n\nif is_true \"$ACCEPT_EARLY_PLUGINS\"; then\n  SERVER_ARGS+=(\"--accept-early-plugins\")\nfi\n\nif is_true \"$ENABLE_BACKUP\"; then\n  SERVER_ARGS+=(\"--backup\")\n  [[ -n \"$BACKUP_DIR\" ]] && SERVER_ARGS+=(\"--backup-dir\" \"$BACKUP_DIR\")\n  if [[ \"$BACKUP_FREQ\" =~ ^[0-9]+$ ]]; then\n    SERVER_ARGS+=(\"--backup-frequency\" \"$BACKUP_FREQ\")\n  fi\n  if [[ \"$BACKUP_MAX\" =~ ^[0-9]+$ ]]; then\n    SERVER_ARGS+=(\"--backup-max-count\" \"$BACKUP_MAX\")\n  fi\nfi\n\nif [[ -n \"$EXTRA_SERVER_ARGS\" ]]; then\n  # shellcheck disable=SC2206\n  SERVER_ARGS+=($EXTRA_SERVER_ARGS)\nfi\n\nlog \"Starte Hytale...\"\nlog \"Bind: ${BIND_ADDRESS}:${SERVER_PORT} | Transport: ${TRANSPORT} | Auth: ${AUTH_MODE}\"\nlog \"Wichtig: QUIC nutzt UDP. Öffne/forwarde den Port als UDP.\"\nlog \"Nach dem ersten Start: in der Serverkonsole '/auth login device' ausführen, damit Spieler beitreten können.\"\n\nexec java \"${JAVA_OPTS[@]}\" -jar \"$ROOT/Server/HytaleServer.jar\" \"${SERVER_ARGS[@]}\"\nEOF\n\nchmod +x /mnt/server/start.sh\n\necho \"==> Installation abgeschlossen.\"\n",
+            "container": "ghcr.io/pterodactyl/installers:alpine",
+            "entrypoint": "ash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Patchline (Update-Kanal)",
+            "description": "Update-Kanal für den Hytale Downloader.",
+            "env_variable": "HYTALE_PATCHLINE",
+            "default_value": "release",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:release,pre-release",
+            "field_type": "text"
+        },
+        {
+            "name": "Auto-Download",
+            "description": "Serverdateien automatisch herunterladen, wenn sie fehlen: 1/true = ja, 0/false = nein.",
+            "env_variable": "AUTO_DOWNLOAD",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Auto-Update (bei jedem Start)",
+            "description": "Bei jedem Start neu herunterladen/aktualisieren: 1/true = ja, 0/false = nein.",
+            "env_variable": "AUTO_UPDATE",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Vor Download bereinigen",
+            "description": "Vor (Re-)Download vorhandene Server-/Client-Dateien und Assets entfernen. 1/true = ja, 0/false = nein.",
+            "env_variable": "FORCE_CLEAN",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Client-Ordner behalten",
+            "description": "Client-Ordner nach dem Download behalten (spart Downloadzeit, kostet Speicher). 1/true = behalten, 0/false = löschen.",
+            "env_variable": "KEEP_CLIENT",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Downloader: Update-Check überspringen",
+            "description": "Überspringt den Update-Check des Hytale Downloaders (schnellerer Start). 1/true = ja, 0/false = nein.",
+            "env_variable": "DOWNLOADER_SKIP_UPDATE_CHECK",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Downloader: Extra-Argumente",
+            "description": "Zusätzliche Argumente für den Hytale Downloader (optional).",
+            "env_variable": "DOWNLOADER_EXTRA_ARGS",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:256",
+            "field_type": "text"
+        },
+        {
+            "name": "Assets-Pfad",
+            "description": "Pfad zu Assets (Datei oder Ordner) relativ zu /home/container. Standard: Assets.zip",
+            "env_variable": "ASSETS_PATH",
+            "default_value": "Assets.zip",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Bind-Adresse",
+            "description": "IP-Adresse im Container, auf die gebunden wird. Standard: 0.0.0.0",
+            "env_variable": "HYTALE_BIND_ADDRESS",
+            "default_value": "0.0.0.0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Transport",
+            "description": "Netzwerk-Transport: QUIC (UDP) oder TCP.",
+            "env_variable": "HYTALE_TRANSPORT",
+            "default_value": "QUIC",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:QUIC,TCP",
+            "field_type": "text"
+        },
+        {
+            "name": "Auth-Modus",
+            "description": "Authentifizierung: authenticated (Standard) oder offline (kein Login, nur lokal/ohne Online-Dienste).",
+            "env_variable": "HYTALE_AUTH_MODE",
+            "default_value": "authenticated",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:authenticated,offline",
+            "field_type": "text"
+        },
+        {
+            "name": "Sentry deaktivieren",
+            "description": "Deaktiviert Crash-Reporting via Sentry (--disable-sentry). Empfohlen bei Plugin-Entwicklung. 1/true = ja, 0/false = nein.",
+            "env_variable": "HYTALE_DISABLE_SENTRY",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Early-Plugins erlauben",
+            "description": "Akzeptiert das Laden von Early-Plugins (--accept-early-plugins). 1/true = ja, 0/false = nein.",
+            "env_variable": "HYTALE_ACCEPT_EARLY_PLUGINS",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Backups aktivieren",
+            "description": "Aktiviert automatische Backups (--backup). 1/true = ja, 0/false = nein.",
+            "env_variable": "HYTALE_ENABLE_BACKUP",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Backup-Verzeichnis",
+            "description": "Optional: Zielverzeichnis für Backups (--backup-dir).",
+            "env_variable": "HYTALE_BACKUP_DIR",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Backup-Intervall (Minuten)",
+            "description": "Backup-Intervall in Minuten (--backup-frequency). Standard laut Server: 30.",
+            "env_variable": "HYTALE_BACKUP_FREQUENCY_MINUTES",
+            "default_value": "30",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|min:1|max:10080",
+            "field_type": "text"
+        },
+        {
+            "name": "Max. Backup-Anzahl",
+            "description": "Maximale Anzahl gespeicherter Backups (--backup-max-count). Standard: 5.",
+            "env_variable": "HYTALE_BACKUP_MAX_COUNT",
+            "default_value": "5",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|min:1|max:1000",
+            "field_type": "text"
+        },
+        {
+            "name": "JVM: MaxRAMPercentage",
+            "description": "Maximaler Anteil des Container-RAM, den Java für Heap nutzen darf (empfohlen 75–90).",
+            "env_variable": "JAVA_MAX_RAM_PERCENT",
+            "default_value": "85",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|numeric|min:50|max:95",
+            "field_type": "text"
+        },
+        {
+            "name": "JVM: InitialRAMPercentage",
+            "description": "Initialer Anteil des Container-RAM für den Heap (Startwert).",
+            "env_variable": "JAVA_INITIAL_RAM_PERCENT",
+            "default_value": "10",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|numeric|min:1|max:50",
+            "field_type": "text"
+        },
+        {
+            "name": "Extra Java-Argumente",
+            "description": "Zusätzliche JVM-Argumente (optional). Beispiel: -XX:MaxGCPauseMillis=200",
+            "env_variable": "JAVA_EXTRA_ARGS",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:512",
+            "field_type": "text"
+        },
+        {
+            "name": "Extra Server-Argumente",
+            "description": "Zusätzliche Argumente für den Hytale Server (optional).",
+            "env_variable": "HYTALE_EXTRA_ARGS",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:512",
+            "field_type": "text"
+        }
+    ]
+}
